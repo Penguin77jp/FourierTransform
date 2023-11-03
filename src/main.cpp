@@ -1,167 +1,84 @@
-#include <vector>
-#include <complex>
-#include <numbers>
 #include <iostream>
 #include <format>
 #include <string>
-#define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
-#include <Eigen/Eigen>
+#include <fstream>
+#include "Util.h"
+#include "DFT.h"
 
-std::complex<double> image_i = { 0,1 };
-
-int main() {
-	const std::string imagePath = "assets/image_low.jpg";
-	std::vector<std::vector<Eigen::Vector3d>> data_raw;
-	// load image
-	{
-		int width, height, comp;
-		unsigned char* data = stbi_load(imagePath.c_str(), &width, &height, &comp, 0);
-		std::cout << std::format("loaded iamge ({}x{}) comp:{}", width, height, comp) << std::endl;
-		data_raw = std::vector<std::vector<Eigen::Vector3d>>(width,
-			std::vector<Eigen::Vector3d>(height, Eigen::Vector3d(0, 0, 0))
-		);
-		for (int index = 0; index < width * height; ++index) {
-			const int indexX = index % width;
-			const int indexY = index / width;
-			data_raw[indexX][indexY] = { (double)data[index * comp + 0], 0,0 };
+int main(int arc, char* argv[]) {
+	if (false) {
+		std::vector<double> in_data;
+		{
+			const std::string csv_path = argv[1];
+			in_data = Util::CSV::ReadCSV<double>(csv_path);
 		}
-		stbi_image_free(data);
+		DFT<double> dft(in_data);
+		for (int i = 0; i < dft.m_fourier_data.size(); ++i) {
+			//std::cout << std::format("dft.m_fourier_data[{}] = {},{}", i, dft.m_fourier_data[i][0], dft.m_fourier_data[i][1]) << std::endl;
+		}
+
+		std::vector<double> result;
+		dft.InvDFT(result);
+		Util::CSV::WriteCSV<double>("result.csv", result);
 	}
-	const int sizeX = data_raw.size();
-	const int sizeY = data_raw[0].size();
 
-	std::vector<std::vector<std::complex<double>>> data_converted(data_raw.size(), std::vector<std::complex<double>>(data_raw[0].size()));
-	// fourier
-	{
-		std::cout << "compute fourier" << std::endl;
-#pragma omp parallel for schedule(dynamic)
-		for (int indexY = 0; indexY < sizeY; ++indexY) {
-			std::cout << std::format("{} / {}", indexY, sizeY) << std::endl;
-			for (int indexX = 0; indexX < sizeX; ++indexX) {
-				std::complex<double> result = { 0,0 };
+	if (true) {
+		const std::string image_path = argv[1];
+		int width, height, channels;
+		unsigned char* image_data = stbi_load(image_path.c_str(), &width, &height, &channels, 0);
+		if (image_data == nullptr) {
+			std::cout << "Failed to load image." << std::endl;
+			return -1;
+		}
+		std::cout << std::format("width = {}, height = {}, channels = {}", width, height, channels) << std::endl;
 
-				for (int searchY = 0; searchY < sizeY; ++searchY) {
-					for (int searchX = 0; searchX < sizeX; ++searchX) {
-						double tmpY = 2.0 * std::numbers::pi * searchY * indexY / sizeY;
-						double tmpX = 2.0 * std::numbers::pi * searchX * indexX / sizeX;
-						result += data_raw[searchX][searchY][0] * std::exp(image_i * tmpY) * std::exp(image_i * tmpX) / (double)(sizeY * sizeX);
-					}
-				}
-				data_converted[indexX][indexY] = result;
+		Util::DBL_VECTOR<unsigned char> in_data;
+		in_data = Util::DBL_VECTOR_INIT<unsigned char>({ width, height });
+		for (int uIndex = 0; uIndex < width; ++uIndex) {
+			for (int vIndex = 0; vIndex < height; ++vIndex) {
+				in_data[uIndex][vIndex] = image_data[channels * width * vIndex + channels * uIndex];
 			}
 		}
-
-		std::cout << "output image(fourier)" << std::endl;
-		std::vector<unsigned char> tmpImage(sizeX * sizeY * 3);
-		double min = data_converted[0][0].real();
-		double max = data_converted[0][0].real();
-		for (int indexY = 0; indexY < sizeY; ++indexY) {
-			for (int indexX = 0; indexX < sizeX; ++indexX) {
-				const int index = indexY * sizeX * 3 + indexX * 3;
-				auto v1 = data_converted[indexX][indexY].real();
-				auto v2 = data_converted[indexX][indexY].imag();
-				min = std::min(min, std::min(v1, v2));
-				max = std::max(max, std::min(v1, v2));
+		{
+			std::vector<unsigned char> result_image;
+			result_image.reserve(width * height);
+			for (int i = 0; i < width * height; ++i) {
+				const int uIndex = i % width;
+				const int vIndex = i / width;
+				result_image.push_back(in_data[uIndex][vIndex]);
+			}
+			stbi_write_png("input_gray.png", width, height, 1, result_image.data(), 0);
+		}
+		stbi_image_free(image_data);
+		DFT2D dft2d(in_data);
+		for (int fourier_idnex0 = 0; fourier_idnex0 < dft2d.m_fourier_data.size(); ++fourier_idnex0) {
+			for (int fourier_idnex1 = 0; fourier_idnex1 < dft2d.m_fourier_data[0].size(); ++fourier_idnex1) {
+				std::cout << std::format("[{}][{}] = real:{},image{}\n",
+					fourier_idnex0,
+					fourier_idnex1,
+					dft2d.m_fourier_data[fourier_idnex0][fourier_idnex1][0],
+					dft2d.m_fourier_data[fourier_idnex0][fourier_idnex1][1]
+				);
 			}
 		}
-		std::cout << "max :" << max << std::endl;
-		for (int indexY = 0; indexY < sizeY; ++indexY) {
-			for (int indexX = 0; indexX < sizeX; ++indexX) {
-				const int index = indexY * sizeX * 3 + indexX * 3;
-				tmpImage[index + 0] = 255 * data_converted[indexX][indexY].real() / max;
-				tmpImage[index + 1] = 255 * data_converted[indexX][indexY].imag() / max;
-				tmpImage[index + 2] = 0;
-			}
+		{
+			// output fourier intensity as image
+			Util::DBL_VECTOR<double> intensity;
+			dft2d.ComputeFourierItensity(intensity);
+			Util::Image::SaveFromVector("fourier_intensity.png", intensity);
 		}
-		stbi_write_bmp("fourier.bmp", sizeX, sizeY, 3, tmpImage.data());
-	}
-	std::vector<std::vector<double>> data_resotre(data_raw.size(), std::vector<double>(data_raw[0].size()));
-	// inv fourier
-	{
-		std::cout << "compute fourier" << std::endl;
-#pragma omp parallel for schedule(dynamic)
-		for (int indexY = 0; indexY < sizeY; ++indexY) {
-			std::cout << std::format("{} / {}", indexY, sizeY) << std::endl;
-			for (int indexX = 0; indexX < sizeX; ++indexX) {
-				double result = 0;
-				for (int searchY = 0; searchY < sizeY; ++searchY) {
-					for (int searchX = 0; searchX < sizeX; ++searchX) {
-						double tmpY = 2.0 * std::numbers::pi * searchY * indexY / sizeY;
-						double tmpX = 2.0 * std::numbers::pi * searchX * indexX / sizeX;
-						auto result_com = data_converted[searchX][searchY] * std::exp(-image_i * tmpY) * std::exp(-image_i * tmpX);
-						result += result_com.real();
-					}
-				}
-				data_resotre[indexX][indexY] = result;
-			}
+
+		Util::DBL_VECTOR<unsigned char> result;
+		dft2d.InvDFT(result);
+		std::vector<unsigned char> result_image;
+		result_image.reserve(width * height);
+		for (int i = 0; i < width * height; ++i) {
+			const int uIndex = i % width;
+			const int vIndex = i / width;
+			result_image.push_back( unsigned char(result[uIndex][vIndex]) );
 		}
+		stbi_write_png("result.png", width, height, 1, result_image.data(), 0);
 	}
-
-	std::vector<unsigned char> out_image(sizeX * sizeY * 3, 0);
-	{
-		std::cout << "output image" << std::endl;
-		for (int indexY = 0; indexY < sizeY; ++indexY) {
-			for (int indexX = 0; indexX < sizeX; ++indexX) {
-				const int index = indexY * sizeX * 3 + indexX * 3;
-				out_image[index + 0] = data_resotre[indexX][indexY];
-				out_image[index + 1] = data_resotre[indexX][indexY];
-				out_image[index + 2] = data_resotre[indexX][indexY];
-			}
-		}
-		stbi_write_bmp("result.bmp", sizeX, sizeY, 3, out_image.data());
-	}
-
-	/*
-
-	for (int indexY = 0; indexY < sizeY; ++indexY) {
-		for (int indexX = 0; indexX < sizeX; ++indexX) {
-			std::complex<double> result = { 0,0 };
-
-			for (int searchY = 0; searchY < sizeY; ++searchY) {
-				for (int searchX = 0; searchX < sizeX; ++searchX) {
-					double tmpY = 2.0 * std::numbers::pi * searchY * indexY / sizeY;
-					double tmpX = 2.0 * std::numbers::pi * searchX * indexX / sizeX;
-					result += data_raw[searchY][searchX] * std::exp(image_i * tmpY) * std::exp(image_i * tmpX) / (double)(sizeY * sizeX);
-				}
-			}
-			data_converted[indexY][indexX] = result;
-		}
-	}
-
-	for (int indexY = 0; indexY < sizeY; ++indexY) {
-		for (int indexX = 0; indexX < sizeX; ++indexX) {
-			double result = 0;
-			for (int searchY = 0; searchY < sizeY; ++searchY) {
-				for (int searchX = 0; searchX < sizeX; ++searchX) {
-					double tmpY = 2.0 * std::numbers::pi * searchY * indexY / sizeY;
-					double tmpX = 2.0 * std::numbers::pi * searchX * indexX / sizeX;
-					auto result_com = data_converted[searchY][searchX] * std::exp(-image_i * tmpY) * std::exp(-image_i * tmpX);
-					result += result_com.real();
-				}
-			}
-			data_resotre[indexY][indexX] = result;
-		}
-	}
-
-	std::cout << "data converted" << std::endl;
-	for (int indexY = 0; indexY < sizeY; ++indexY) {
-		for (int indexX = 0; indexX < sizeX; ++indexX) {
-			std::cout << std::format("({}, {}j) ", data_converted[indexY][indexX].real(), data_converted[indexY][indexX].imag());
-		}
-		std::cout << std::endl;
-	}
-
-	std::cout << "data restore" << std::endl;
-	for (int indexY = 0; indexY < sizeY; ++indexY) {
-		for (int indexX = 0; indexX < sizeX; ++indexX) {
-			std::cout << std::format("{:.2f} ", data_resotre[indexY][indexX]);
-		}
-		std::cout << std::endl;
-	}
-	*/
 
 	return 0;
 }
